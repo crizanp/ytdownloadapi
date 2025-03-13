@@ -24,6 +24,21 @@ if (!fs.existsSync(tempDir)) {
   fs.mkdirSync(tempDir, { recursive: true });
 }
 
+// Common request options to avoid bot detection
+const requestOptions = {
+  headers: {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Sec-Fetch-Dest': 'document',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': 'none',
+    'Sec-Fetch-User': '?1',
+    'Upgrade-Insecure-Requests': '1',
+    'Cookie': process.env.YOUTUBE_COOKIES || '' // Set cookies from environment variable
+  }
+};
+
 // ==========================================
 // SHARED UTILITIES
 // ==========================================
@@ -68,7 +83,7 @@ app.get('/api/info', async (req, res) => {
       return res.status(400).json({ error: 'Invalid YouTube URL' });
     }
 
-    const info = await ytdl.getInfo(url);
+    const info = await ytdl.getInfo(url, { requestOptions });
     const formats = info.formats
       .filter(f => f.qualityLabel || f.audioQuality)
       .map(format => ({
@@ -109,7 +124,7 @@ app.get('/api/download', async (req, res) => {
       return res.status(400).send('Invalid YouTube URL');
     }
 
-    const info = await ytdl.getInfo(url);
+    const info = await ytdl.getInfo(url, { requestOptions });
     const format = info.formats.find(f => f.itag === parseInt(itag));
     if (!format) return res.status(400).send('Invalid format');
 
@@ -123,7 +138,7 @@ app.get('/api/download', async (req, res) => {
       if (format.contentLength) {
         res.header('Content-Length', format.contentLength);
       }
-      ytdl(url, { format }).pipe(res);
+      ytdl(url, { format, requestOptions }).pipe(res);
     } else {
       // For video-only formats, redirect to the new endpoint system
       res.status(400).send('Please use /api/download/start for video-only formats');
@@ -148,7 +163,7 @@ app.get('/api/download/start', async (req, res) => {
     const jobId = uuidv4();
     
     // Get video information
-    const info = await ytdl.getInfo(url);
+    const info = await ytdl.getInfo(url, { requestOptions });
     const format = info.formats.find(f => f.itag === parseInt(itag));
     
     if (!format) {
@@ -255,7 +270,7 @@ async function processDownload(jobId, url, format, audioFormat, videoPath, audio
   try {
     // Download video with progress tracking
     const videoWriteStream = fs.createWriteStream(videoPath);
-    const videoDownload = ytdl(url, { format });
+    const videoDownload = ytdl(url, { format, requestOptions });
     
     let videoTotalBytes = 0;
     let videoDownloadedBytes = 0;
@@ -295,7 +310,7 @@ async function processDownload(jobId, url, format, audioFormat, videoPath, audio
   
     // Download audio with progress tracking
     const audioWriteStream = fs.createWriteStream(audioPath);
-    const audioDownload = ytdl(url, { format: audioFormat });
+    const audioDownload = ytdl(url, { format: audioFormat, requestOptions });
     
     let audioTotalBytes = 0;
     let audioDownloadedBytes = 0;
@@ -376,10 +391,84 @@ async function processDownload(jobId, url, format, audioFormat, videoPath, audio
   }
 }
 
+// Add a health check endpoint
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', message: 'Service is running' });
+});
+
+// Add an API endpoint for providing YouTube cookies
+app.post('/api/set-cookies', (req, res) => {
+  const { cookies } = req.body;
+  
+  if (!cookies) {
+    return res.status(400).json({ error: 'No cookies provided' });
+  }
+  
+  // Update request options with the new cookies
+  requestOptions.headers.Cookie = cookies;
+  
+  res.json({ success: true, message: 'Cookies updated successfully' });
+});
+
+// Add endpoint to clear temporary files
+app.post('/api/maintenance/cleanup', (req, res) => {
+  let cleanedCount = 0;
+  try {
+    fs.readdir(tempDir, (err, files) => {
+      if (err) {
+        return res.status(500).json({ error: err.message });
+      }
+      
+      files.forEach(file => {
+        const filePath = path.join(tempDir, file);
+        fs.unlinkSync(filePath);
+        cleanedCount++;
+      });
+      
+      res.json({ success: true, message: `Cleaned up ${cleanedCount} files` });
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message, cleaned: cleanedCount });
+  }
+});
+
+// ==========================================
+// VERCEL OPTIMIZATION
+// ==========================================
+
+// Check if running on Vercel
+const isVercel = process.env.VERCEL === '1';
+
+if (isVercel) {
+  // Add route for Vercel serverless function detection
+  app.get('/api/vercel-ready', (req, res) => {
+    res.json({ 
+      ready: true,
+      environment: 'vercel',
+      message: 'This app has limited functionality on Vercel due to serverless function limitations. Consider using a different hosting provider for better performance.'
+    });
+  });
+  
+  // Override download endpoints with a more appropriate message for Vercel
+  app.get('/api/download', (req, res) => {
+    res.status(400).json({ 
+      error: 'Direct downloads are not supported on Vercel due to serverless function timeout limits. Please use a different hosting provider.',
+      suggestion: 'Consider deploying this app to Heroku, Railway, or a VPS for full functionality.'
+    });
+  });
+  
+  app.get('/api/download/start', (req, res) => {
+    res.status(400).json({ 
+      error: 'Advanced downloads are not supported on Vercel due to serverless function timeout limits. Please use a different hosting provider.',
+      suggestion: 'Consider deploying this app to Heroku, Railway, or a VPS for full functionality.'
+    });
+  });
+}
 
 // Start the server
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 module.exports = app;
