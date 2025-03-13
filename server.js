@@ -19,7 +19,7 @@ app.use(cors());
 app.use(express.json());
 
 // Create temp directory for file processing
-const tempDir = path.join(os.tmpdir(), 'youtube-downloader');
+const tempDir = path.join('/tmp', 'youtube-downloader');
 if (!fs.existsSync(tempDir)) {
   fs.mkdirSync(tempDir, { recursive: true });
 }
