@@ -7,22 +7,17 @@ const path = require('path');
 const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
 
-// Create router
 const router = express.Router();
 
-// Set up ffmpeg
 ffmpeg.setFfmpegPath(ffmpegPath);
 
-// Create temp directory for file processing
 const tempDir = path.join(os.tmpdir(), 'youtube-downloader');
 if (!fs.existsSync(tempDir)) {
   fs.mkdirSync(tempDir, { recursive: true });
 }
 
-// Store active download jobs
 const activeJobs = new Map();
 
-// Clean up old jobs every hour
 setInterval(() => {
   const now = Date.now();
   for (const [jobId, job] of activeJobs.entries()) {
@@ -33,7 +28,6 @@ setInterval(() => {
   }
 }, 3600000);
 
-// Clean up function to remove files
 function cleanupFiles(filePaths) {
   for (const filePath of filePaths) {
     if (filePath && fs.existsSync(filePath)) {
@@ -46,7 +40,6 @@ function cleanupFiles(filePaths) {
   }
 }
 
-// Process download
 async function processDownload(jobId, url, format, audioFormat, videoPath, audioPath, outputPath) {
   try {
     const videoWriteStream = fs.createWriteStream(videoPath);
@@ -162,7 +155,6 @@ async function processDownload(jobId, url, format, audioFormat, videoPath, audio
   }
 }
 
-// Get video information endpoint
 router.get('/info', async (req, res) => {
   try {
     const url = req.query.url;
@@ -201,7 +193,6 @@ router.get('/info', async (req, res) => {
   }
 });
 
-// Start advanced download process
 router.get('/download/start', async (req, res) => {
   try {
     const url = req.query.url;
@@ -256,7 +247,6 @@ router.get('/download/start', async (req, res) => {
   }
 });
 
-// Check the progress of a download job
 router.get('/download/progress', (req, res) => {
   const { jobId } = req.query;
   
@@ -272,7 +262,6 @@ router.get('/download/progress', (req, res) => {
   });
 });
 
-// Download the completed file
 router.get('/download/file', (req, res) => {
   const { jobId } = req.query;
   

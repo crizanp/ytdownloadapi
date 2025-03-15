@@ -9,22 +9,17 @@ const { v4: uuidv4 } = require('uuid');
 const Queue = require('better-queue');
 const archiver = require('archiver');
 
-// Create router
 const router = express.Router();
 
-// Set up middleware
 ffmpeg.setFfmpegPath(ffmpegPath);
 
-// Create temp directory for file processing
 const tempDir = path.join(os.tmpdir(), 'youtube-downloader');
 if (!fs.existsSync(tempDir)) {
   fs.mkdirSync(tempDir, { recursive: true });
 }
 
-// Store batch jobs
 const batchJobs = new Map();
 
-// Batch processing queue to limit concurrent downloads
 const downloadQueue = new Queue(async function(task, callback) {
   try {
     await processDownloadItem(task);
@@ -39,7 +34,6 @@ const downloadQueue = new Queue(async function(task, callback) {
   retryDelay: 3000
 });
 
-// Clean up function to remove files
 function cleanupFiles(filePaths) {
   for (const filePath of filePaths) {
     if (filePath && fs.existsSync(filePath)) {
@@ -52,7 +46,6 @@ function cleanupFiles(filePaths) {
   }
 }
 
-// Create a new batch download job
 router.post('/batch/create', (req, res) => {
   try {
     const { urls, defaultFormat } = req.body;
@@ -110,7 +103,6 @@ router.post('/batch/create', (req, res) => {
   }
 });
 
-// Get all video info for a batch
 router.get('/batch/info', async (req, res) => {
   try {
     const { batchId } = req.query;
@@ -191,7 +183,6 @@ router.get('/batch/info', async (req, res) => {
   }
 });
 
-// Start downloading a batch
 router.post('/batch/download', (req, res) => {
   try {
     const { batchId, formats } = req.body;
@@ -218,7 +209,6 @@ router.post('/batch/download', (req, res) => {
       .forEach(item => {
         item.status = 'queued';
         
-        // Add to download queue
         downloadQueue.push({
           jobId: item.id,
           url: item.url,
@@ -241,7 +231,6 @@ router.post('/batch/download', (req, res) => {
   }
 });
 
-// Process a single download item in the batch
 async function processDownloadItem(task) {
   const { jobId, url, format, batchId, itemId } = task;
   
@@ -257,10 +246,8 @@ async function processDownloadItem(task) {
   }
   
   try {
-    // Update status to downloading
     item.status = 'downloading';
     
-    // Get video information
     const info = await ytdl.getInfo(url);
     const selectedFormat = info.formats.find(f => f.itag === parseInt(format));
     
@@ -268,31 +255,24 @@ async function processDownloadItem(task) {
       throw new Error('Selected format not available');
     }
     
-    // Sanitize title for filename
     const title = info.videoDetails.title.replace(/[^\w\s]/gi, '');
     
-    // Create output paths
     const videoPath = path.join(tempDir, `${jobId}-video.${selectedFormat.container}`);
     const audioPath = path.join(tempDir, `${jobId}-audio.mp4`);
     const outputPath = path.join(tempDir, `${jobId}-output.${selectedFormat.hasVideo ? 'mp4' : selectedFormat.container}`);
     
-    // Store output path in the item
     item.outputPath = outputPath;
     
-    // Different handling based on format type
     if (selectedFormat.hasVideo && !selectedFormat.hasAudio) {
-      // Video-only format: need to download audio and merge
       const audioFormat = ytdl.chooseFormat(info.formats, { quality: 'highestaudio' });
       
       if (!audioFormat) {
         throw new Error('No suitable audio format found');
       }
       
-      // Download and process
       const videoStream = ytdl(url, { format: selectedFormat });
       const videoWriter = fs.createWriteStream(videoPath);
       
-      // Track progress
       let videoTotalBytes = 0;
       let videoDownloadedBytes = 0;
       
@@ -317,11 +297,9 @@ async function processDownloadItem(task) {
         videoStream.on('error', reject);
       });
       
-      // Update progress
       item.progress = 40;
       updateBatchProgress(batchId);
       
-      // Download audio
       const audioStream = ytdl(url, { format: audioFormat });
       const audioWriter = fs.createWriteStream(audioPath);
       
@@ -349,11 +327,9 @@ async function processDownloadItem(task) {
         audioStream.on('error', reject);
       });
       
-      // Update progress
       item.progress = 70;
       updateBatchProgress(batchId);
       
-      // Merge video and audio
       await new Promise((resolve, reject) => {
         ffmpeg()
           .input(videoPath)
@@ -373,11 +349,9 @@ async function processDownloadItem(task) {
           .save(outputPath);
       });
       
-      // Clean up temporary files
       cleanupFiles([videoPath, audioPath]);
       
     } else if (selectedFormat.hasAudio) {
-      // Format has audio (either audio-only or audio+video): direct download
       const stream = ytdl(url, { format: selectedFormat });
       const writer = fs.createWriteStream(outputPath);
       
@@ -406,7 +380,6 @@ async function processDownloadItem(task) {
       });
     }
     
-    // Mark as completed
     item.status = 'completed';
     item.progress = 100;
     batchJob.completedItems++;
@@ -419,17 +392,14 @@ async function processDownloadItem(task) {
   } catch (error) {
     console.error(`Error processing item ${itemId}:`, error);
     
-    // Update item with error
     item.status = 'error';
     item.error = error.message || 'Error processing download';
     item.progress = 0;
     batchJob.failedItems++;
     
-    // Update batch progress
     updateBatchProgress(batchId);
     
-    // Clean up any temporary files
-    if (item.outputPath) {
+   if (item.outputPath) {
       cleanupFiles([item.outputPath]);
       item.outputPath = null;
     }
@@ -437,17 +407,14 @@ async function processDownloadItem(task) {
     throw error;
   }
 }
-// Update batch job progress based on individual items
 function updateBatchProgress(batchId) {
     if (!batchJobs.has(batchId)) return;
     
     const batchJob = batchJobs.get(batchId);
     
-    // Calculate overall progress
     const totalProgress = batchJob.items.reduce((sum, item) => sum + item.progress, 0);
     batchJob.progress = totalProgress / batchJob.totalItems;
     
-    // Check if all items are finished
     const pendingItems = batchJob.items.filter(item => 
       item.status === 'queued' || 
       item.status === 'downloading'
@@ -458,7 +425,6 @@ function updateBatchProgress(batchId) {
     }
   }
   
-  // Get batch job status
   router.get('/status', (req, res) => {
     try {
       const { batchId } = req.query;
@@ -469,7 +435,6 @@ function updateBatchProgress(batchId) {
       
       const batchJob = batchJobs.get(batchId);
       
-      // Return batch status summary
       res.json({
         batchId,
         status: batchJob.status,
@@ -492,7 +457,6 @@ function updateBatchProgress(batchId) {
     }
   });
   
-  // Download completed batch as zip
   router.get('/download/zip', (req, res) => {
     try {
       const { batchId } = req.query;
@@ -503,7 +467,6 @@ function updateBatchProgress(batchId) {
       
       const batchJob = batchJobs.get(batchId);
       
-      // Check if batch has completed items
       const completedItems = batchJob.items.filter(item => 
         item.status === 'completed' && 
         item.outputPath && 
@@ -514,31 +477,25 @@ function updateBatchProgress(batchId) {
         return res.status(400).json({ error: 'No completed downloads in this batch' });
       }
       
-      // Create a zip file
       const zipPath = path.join(tempDir, `${batchId}-downloads.zip`);
       const output = fs.createWriteStream(zipPath);
       const archive = archiver('zip', { zlib: { level: 5 } });
       
-      // Pipe archive to output file
       archive.pipe(output);
       
-      // Add each file to the archive
       completedItems.forEach(item => {
         const fileExt = item.info && item.info.formats && item.info.formats.find(f => f.itag === item.format)?.container || 'mp4';
         const sanitizedTitle = item.info?.title?.replace(/[^\w\s]/gi, '') || `video-${item.id}`;
         archive.file(item.outputPath, { name: `${sanitizedTitle}.${fileExt}` });
       });
       
-      // Finalize archive
       archive.finalize();
       
-      // Return zip file when ready
       output.on('close', () => {
         res.download(zipPath, 'youtube-downloads.zip', err => {
           if (err) {
             console.error('Error sending zip file:', err);
           }
-          // Clean up the zip file after a delay
           setTimeout(() => {
             if (fs.existsSync(zipPath)) {
               fs.unlinkSync(zipPath);
@@ -547,7 +504,6 @@ function updateBatchProgress(batchId) {
         });
       });
       
-      // Handle errors
       archive.on('error', err => {
         console.error('Error creating zip archive:', err);
         res.status(500).json({ error: 'Failed to create zip file' });
@@ -558,7 +514,6 @@ function updateBatchProgress(batchId) {
     }
   });
   
-  // Download a single completed item from a batch
   router.get('/download/item', (req, res) => {
     try {
       const { batchId, itemId } = req.query;
@@ -578,11 +533,9 @@ function updateBatchProgress(batchId) {
         return res.status(400).json({ error: 'Item not ready for download' });
       }
       
-      // Determine file extension
       const fileExt = item.info && item.info.formats && item.info.formats.find(f => f.itag === item.format)?.container || 'mp4';
       const sanitizedTitle = item.info?.title?.replace(/[^\w\s]/gi, '') || `video-${item.id}`;
       
-      // Send the file
       res.download(item.outputPath, `${sanitizedTitle}.${fileExt}`);
     } catch (error) {
       console.error('Error downloading batch item:', error);
@@ -590,7 +543,6 @@ function updateBatchProgress(batchId) {
     }
   });
   
-  // Clean up a batch job (delete files and remove from memory)
   router.delete('/:batchId', (req, res) => {
     try {
       const { batchId } = req.params;
@@ -601,14 +553,12 @@ function updateBatchProgress(batchId) {
       
       const batchJob = batchJobs.get(batchId);
       
-      // Clean up all output files
       batchJob.items.forEach(item => {
         if (item.outputPath && fs.existsSync(item.outputPath)) {
           fs.unlinkSync(item.outputPath);
         }
       });
       
-      // Remove batch job from memory
       batchJobs.delete(batchId);
       
       res.json({ message: 'Batch job deleted successfully' });
@@ -618,13 +568,10 @@ function updateBatchProgress(batchId) {
     }
   });
   
-  // Clean up old batch jobs every 6 hours
   setInterval(() => {
     const now = Date.now();
     for (const [batchId, batchJob] of batchJobs.entries()) {
-      // Remove jobs older than 6 hours
       if (now - batchJob.createdAt > 6 * 3600000) {
-        // Clean up files
         batchJob.items.forEach(item => {
           if (item.outputPath && fs.existsSync(item.outputPath)) {
             try {
@@ -635,11 +582,9 @@ function updateBatchProgress(batchId) {
           }
         });
         
-        // Remove from memory
         batchJobs.delete(batchId);
       }
     }
   }, 6 * 3600000);
   
-  // Export the router
   module.exports = router;
